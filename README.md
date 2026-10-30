@@ -21,7 +21,7 @@ java -jar target/patent-translation-1.0.0.jar
 
 Base URL: `http://127.0.0.1:8080`.
 
-- Swagger UI: `http://127.0.0.1:8080/swagger-ui.html`
+- Swagger UI: `http://127.0.0.1:8080/swagger-ui/index.html`
 - OpenAPI JSON: `http://127.0.0.1:8080/openapi.json`
 
 Click **Authorize** in Swagger and enter `dev-api-key`. All `/api/**` requests require the `X-API-Key` header. Documentation is public.
