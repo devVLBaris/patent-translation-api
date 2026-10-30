@@ -1,0 +1,938 @@
+{
+  "info": {
+    "_postman_id": "e5ffa99e-2011-49ba-b8b6-e02cf7807a9b",
+    "name": "Patent Translation - API Tests",
+    "description": "Run the full collection with the Local environment. Uses default server delays (5-15 seconds). Lifecycle requests save requestId and poll automatically (30s timeout). FAILED and scheduler failure are covered by Java tests, without test-only production endpoints.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "X-API-Key",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "{{apiKey}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "requestId",
+      "value": ""
+    },
+    {
+      "key": "pollStartedAt",
+      "value": ""
+    },
+    {
+      "key": "expectedResult",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "01 Translation lifecycle",
+      "item": [
+        {
+          "name": "01 Submit translation",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/translate",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"patentId\": \"EP-POSTMAN-123\", \"sourceLang\": \"en\", \"targetLang\": \"tr\", \"documentText\": \"Hello patent 🌍\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 202', () => pm.response.to.have.status(202));",
+                  "const data = pm.response.json();",
+                  "pm.test('Initial status is PENDING', () => pm.expect(data.status).to.eql('PENDING'));",
+                  "pm.test('UUID requestId', () => pm.expect(data.requestId).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i));",
+                  "pm.collectionVariables.set('requestId', data.requestId);",
+                  "pm.collectionVariables.set('pollStartedAt', String(Date.now()));",
+                  "pm.collectionVariables.set('expectedResult', Array.from(JSON.parse(pm.request.body.raw).documentText).reverse().join(''));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "02 Read pending status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/translate/{{requestId}}/status"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Request ID matches', () => pm.expect(pm.response.json().requestId).to.eql(pm.collectionVariables.get('requestId')));",
+                  "pm.test('Status is PENDING', () => pm.expect(pm.response.json().status).to.eql('PENDING'));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "03 Pending result is unavailable",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/translate/{{requestId}}/result"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 409', () => pm.response.to.have.status(409));",
+                  "pm.test('Error code: NOT_READY', () => pm.expect(pm.response.json().error).to.eql('NOT_READY'));",
+                  "pm.test('Readable error message', () => pm.expect(pm.response.json().message).to.be.a('string').and.not.empty);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "04 Poll until completed",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/translate/{{requestId}}/status"
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "setTimeout(() => {}, Number(pm.environment.get('pollIntervalMs') || 500));",
+                  "})();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const data = pm.response.json();",
+                  "pm.test('Polling the same request', () => pm.expect(data.requestId).to.eql(pm.collectionVariables.get('requestId')));",
+                  "pm.test('Valid status', () => pm.expect(data.status).to.be.oneOf(['PENDING', 'COMPLETED', 'FAILED']));",
+                  "const elapsed = Date.now() - Number(pm.collectionVariables.get('pollStartedAt'));",
+                  "const timeout = Number(pm.environment.get('pollTimeoutMs') || 30000);",
+                  "if (data.status === 'PENDING' && elapsed < timeout) {",
+                  "    pm.execution.setNextRequest(pm.info.requestName);",
+                  "} else {",
+                  "    pm.test('Translation completed before timeout', () => pm.expect(data.status).to.eql('COMPLETED'));",
+                  "    if (data.status !== 'COMPLETED') pm.execution.setNextRequest(null);",
+                  "}",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "05 Read completed result",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/translate/{{requestId}}/result"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const data = pm.response.json();",
+                  "pm.test('Result belongs to submitted request', () => pm.expect(data.requestId).to.eql(pm.collectionVariables.get('requestId')));",
+                  "pm.test('Unicode document reversed correctly', () => pm.expect(data.resultText).to.eql(pm.collectionVariables.get('expectedResult')));",
+                  "pm.test('No internal document data exposed', () => pm.expect(Object.keys(data).sort()).to.eql(['requestId', 'resultText']));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 Authentication",
+      "item": [
+        {
+          "name": "Missing API key - submit",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/translate",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"patentId\": \"EP-POSTMAN-123\", \"sourceLang\": \"en\", \"targetLang\": \"tr\", \"documentText\": \"Hello patent 🌍\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));",
+                  "pm.test('Error code: UNAUTHORIZED', () => pm.expect(pm.response.json().error).to.eql('UNAUTHORIZED'));",
+                  "pm.test('Readable error message', () => pm.expect(pm.response.json().message).to.be.a('string').and.not.empty);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing API key - status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/translate/{{requestId}}/status",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));",
+                  "pm.test('Error code: UNAUTHORIZED', () => pm.expect(pm.response.json().error).to.eql('UNAUTHORIZED'));",
+                  "pm.test('Readable error message', () => pm.expect(pm.response.json().message).to.be.a('string').and.not.empty);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing API key - result",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/translate/{{requestId}}/result",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));",
+                  "pm.test('Error code: UNAUTHORIZED', () => pm.expect(pm.response.json().error).to.eql('UNAUTHORIZED'));",
+                  "pm.test('Readable error message', () => pm.expect(pm.response.json().message).to.be.a('string').and.not.empty);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Wrong API key - submit",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/translate",
+            "auth": {
+              "type": "apikey",
+              "apikey": [
+                {
+                  "key": "key",
+                  "value": "X-API-Key",
+                  "type": "string"
+                },
+                {
+                  "key": "value",
+                  "value": "incorrect-postman-key",
+                  "type": "string"
+                },
+                {
+                  "key": "in",
+                  "value": "header",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"patentId\": \"EP-POSTMAN-123\", \"sourceLang\": \"en\", \"targetLang\": \"tr\", \"documentText\": \"Hello patent 🌍\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));",
+                  "pm.test('Error code: UNAUTHORIZED', () => pm.expect(pm.response.json().error).to.eql('UNAUTHORIZED'));",
+                  "pm.test('Readable error message', () => pm.expect(pm.response.json().message).to.be.a('string').and.not.empty);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Wrong API key - status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/translate/{{requestId}}/status",
+            "auth": {
+              "type": "apikey",
+              "apikey": [
+                {
+                  "key": "key",
+                  "value": "X-API-Key",
+                  "type": "string"
+                },
+                {
+                  "key": "value",
+                  "value": "incorrect-postman-key",
+                  "type": "string"
+                },
+                {
+                  "key": "in",
+                  "value": "header",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));",
+                  "pm.test('Error code: UNAUTHORIZED', () => pm.expect(pm.response.json().error).to.eql('UNAUTHORIZED'));",
+                  "pm.test('Readable error message', () => pm.expect(pm.response.json().message).to.be.a('string').and.not.empty);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Wrong API key - result",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/translate/{{requestId}}/result",
+            "auth": {
+              "type": "apikey",
+              "apikey": [
+                {
+                  "key": "key",
+                  "value": "X-API-Key",
+                  "type": "string"
+                },
+                {
+                  "key": "value",
+                  "value": "incorrect-postman-key",
+                  "type": "string"
+                },
+                {
+                  "key": "in",
+                  "value": "header",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));",
+                  "pm.test('Error code: UNAUTHORIZED', () => pm.expect(pm.response.json().error).to.eql('UNAUTHORIZED'));",
+                  "pm.test('Readable error message', () => pm.expect(pm.response.json().message).to.be.a('string').and.not.empty);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 Input validation",
+      "item": [
+        {
+          "name": "Missing patentId",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/translate",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"sourceLang\": \"en\", \"targetLang\": \"tr\", \"documentText\": \"Hello patent 🌍\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Error code: VALIDATION_ERROR', () => pm.expect(pm.response.json().error).to.eql('VALIDATION_ERROR'));",
+                  "pm.test('Readable error message', () => pm.expect(pm.response.json().message).to.be.a('string').and.not.empty);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing sourceLang",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/translate",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"patentId\": \"EP-POSTMAN-123\", \"targetLang\": \"tr\", \"documentText\": \"Hello patent 🌍\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Error code: VALIDATION_ERROR', () => pm.expect(pm.response.json().error).to.eql('VALIDATION_ERROR'));",
+                  "pm.test('Readable error message', () => pm.expect(pm.response.json().message).to.be.a('string').and.not.empty);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing targetLang",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/translate",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"patentId\": \"EP-POSTMAN-123\", \"sourceLang\": \"en\", \"documentText\": \"Hello patent 🌍\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Error code: VALIDATION_ERROR', () => pm.expect(pm.response.json().error).to.eql('VALIDATION_ERROR'));",
+                  "pm.test('Readable error message', () => pm.expect(pm.response.json().message).to.be.a('string').and.not.empty);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing documentText",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/translate",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"patentId\": \"EP-POSTMAN-123\", \"sourceLang\": \"en\", \"targetLang\": \"tr\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Error code: VALIDATION_ERROR', () => pm.expect(pm.response.json().error).to.eql('VALIDATION_ERROR'));",
+                  "pm.test('Readable error message', () => pm.expect(pm.response.json().message).to.be.a('string').and.not.empty);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Blank documentText",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/translate",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"patentId\": \"EP-POSTMAN-123\", \"sourceLang\": \"en\", \"targetLang\": \"tr\", \"documentText\": \"   \"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Error code: VALIDATION_ERROR', () => pm.expect(pm.response.json().error).to.eql('VALIDATION_ERROR'));",
+                  "pm.test('Readable error message', () => pm.expect(pm.response.json().message).to.be.a('string').and.not.empty);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Oversized patentId",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/translate",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"patentId\": \"PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP\", \"sourceLang\": \"en\", \"targetLang\": \"tr\", \"documentText\": \"Hello patent 🌍\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Error code: VALIDATION_ERROR', () => pm.expect(pm.response.json().error).to.eql('VALIDATION_ERROR'));",
+                  "pm.test('Readable error message', () => pm.expect(pm.response.json().message).to.be.a('string').and.not.empty);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Malformed JSON",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/translate",
+            "body": {
+              "mode": "raw",
+              "raw": "{",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Error code: INVALID_REQUEST', () => pm.expect(pm.response.json().error).to.eql('INVALID_REQUEST'));",
+                  "pm.test('Readable error message', () => pm.expect(pm.response.json().message).to.be.a('string').and.not.empty);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Null JSON body",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/translate",
+            "body": {
+              "mode": "raw",
+              "raw": "null",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Error code: INVALID_REQUEST', () => pm.expect(pm.response.json().error).to.eql('INVALID_REQUEST'));",
+                  "pm.test('Readable error message', () => pm.expect(pm.response.json().message).to.be.a('string').and.not.empty);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unsupported content type",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/plain"
+              }
+            ],
+            "url": "{{baseUrl}}/api/translate",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"patentId\": \"EP-POSTMAN-123\", \"sourceLang\": \"en\", \"targetLang\": \"tr\", \"documentText\": \"Hello patent 🌍\"}",
+              "options": {
+                "raw": {
+                  "language": "text"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 415', () => pm.response.to.have.status(415));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 Request lookups",
+      "item": [
+        {
+          "name": "Unknown request - status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/translate/00000000-0000-0000-0000-000000000000/status"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 404', () => pm.response.to.have.status(404));",
+                  "pm.test('Error code: NOT_FOUND', () => pm.expect(pm.response.json().error).to.eql('NOT_FOUND'));",
+                  "pm.test('Readable error message', () => pm.expect(pm.response.json().message).to.be.a('string').and.not.empty);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid UUID - status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/translate/not-a-uuid/status"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Error code: INVALID_REQUEST', () => pm.expect(pm.response.json().error).to.eql('INVALID_REQUEST'));",
+                  "pm.test('Readable error message', () => pm.expect(pm.response.json().message).to.be.a('string').and.not.empty);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown request - result",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/translate/00000000-0000-0000-0000-000000000000/result"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 404', () => pm.response.to.have.status(404));",
+                  "pm.test('Error code: NOT_FOUND', () => pm.expect(pm.response.json().error).to.eql('NOT_FOUND'));",
+                  "pm.test('Readable error message', () => pm.expect(pm.response.json().message).to.be.a('string').and.not.empty);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid UUID - result",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/translate/not-a-uuid/result"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Error code: INVALID_REQUEST', () => pm.expect(pm.response.json().error).to.eql('INVALID_REQUEST'));",
+                  "pm.test('Readable error message', () => pm.expect(pm.response.json().message).to.be.a('string').and.not.empty);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "05 Documentation",
+      "item": [
+        {
+          "name": "Public OpenAPI document",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/openapi.json",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const spec = pm.response.json();",
+                  "pm.test('All three API paths documented', () => {",
+                  "    pm.expect(spec.paths['/api/translate'].post).to.exist;",
+                  "    pm.expect(spec.paths['/api/translate/{requestId}/status'].get).to.exist;",
+                  "    pm.expect(spec.paths['/api/translate/{requestId}/result'].get).to.exist;",
+                  "});",
+                  "pm.test('API key security documented', () => pm.expect(spec.components.securitySchemes.ApiKey.name).to.eql('X-API-Key'));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Public Swagger UI",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/swagger-ui/index.html",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function () {",
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Swagger HTML', () => pm.expect(pm.response.text()).to.include('swagger-ui'));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
